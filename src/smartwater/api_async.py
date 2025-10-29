@@ -71,11 +71,6 @@ class AsyncSmartWaterApi:
         self._refresh_task = None
         self._refresh_schedule: float = 0
 
-        # Retrieved data
-        self._profile: dict = {}
-        self._gateway_map: dict[str, dict] = {}
-        self._device_map: dict[str, dict] = {}
-
         # Http Client.
         self._http_client: httpx.AsyncClient = client or httpx.AsyncClient()
 
@@ -101,6 +96,11 @@ class AsyncSmartWaterApi:
         self._diag_methods: dict[str, int] = { n.name: 0 for n in FirestoreMethod }
 
 
+    @property
+    def profile_id(self) -> str:
+        return self._user_id
+    
+    
     @property
     def closed(self) -> bool:
         if self._http_client:
@@ -418,8 +418,6 @@ class AsyncSmartWaterApi:
     async def fetch_profile(self):
         """
         Get user profile
-        This fills:
-          self._profile
         """
         
         await self.login()
@@ -507,8 +505,6 @@ class AsyncSmartWaterApi:
     async def fetch_gateway(self, gateway_id: str):
         """
         Get gatweway
-        This fills:
-          self._gateway_map
         """
 
         await self.login()
@@ -526,8 +522,6 @@ class AsyncSmartWaterApi:
     async def fetch_gateways(self):
         """
         Get all available gateways
-        This fills:
-          self._gateway_map
         """
 
         await self.login()
@@ -574,8 +568,6 @@ class AsyncSmartWaterApi:
     async def fetch_device(self, device_id: str):
         """
         Get device (tank or pump)
-        This fills:
-          self._device_map
         """
 
         await self.login()
@@ -593,8 +585,6 @@ class AsyncSmartWaterApi:
     async def fetch_devices(self, gateway_id: str):
         """
         Get all available devices for a gatweway
-        This fills:
-          self._device_map
         """
 
         await self.login()
