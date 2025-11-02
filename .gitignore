@@ -1,6 +1,7 @@
 # Custom for this project
-tests/secrets.py
-secrets.py
+_backup/
+_data/
+_icons/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -93,7 +93,7 @@ class AsyncSmartWaterApi:
         self._diag_details: dict[str, SmartWaterHistoryDetail] = {}
 
         self._diag_durations: dict[int, int] = { n: 0 for n in range(10) }
-        self._diag_methods: dict[str, int] = { n.name: 0 for n in FirestoreMethod }
+        self._diag_methods: dict[str, int] = { m: 0 for m in FirestoreMethod }
 
 
     @property
@@ -208,7 +208,7 @@ class AsyncSmartWaterApi:
         }
         self._add_diagnostics(timestamp, context, None, None, token)
 
-        _LOGGER.debug(f"Reuse the access-token")
+        #_LOGGER.debug(f"Reuse the access-token")
         return True
 
 
@@ -769,6 +769,8 @@ class AsyncSmartWaterApi:
             return
 
         method = request.get("method", "unknown") if request is not None else None
+        method = method.replace("GET", "HttpGet").replace("POST", "HttpPost")
+
         duration = response.get("elapsed", None) if response is not None else None
         duration = round(duration, 0) if duration is not None else None
         
