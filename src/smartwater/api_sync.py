@@ -181,8 +181,7 @@ class SmartWaterApi:
                     return 
             
             except Exception as ex:
-                #AJH
-                _LOGGER.debug(f"*** Exception in _login: {ex}")
+                _LOGGER.debug(str(ex))
                 error = ex
 
                 # Clear any previous login tokens before trying the next method
@@ -196,39 +195,23 @@ class SmartWaterApi:
     def _login_access_token(self) -> bool:
         """Inspect whether the access token is still valid"""
 
-        #AJH
-        _LOGGER.debug(f"*** _login_access_token 1")
-
         if self._access_token is None or self._access_exp_ts is None:
             # No acces-token to check; silently continue to the next login method (token refresh)
-            #AJH
-            _LOGGER.debug(f"*** No token; access_token={self._access_token}, exp={self._access_exp_ts}")
             return False
 
         # inspect the exp field inside the access_token
         if self._access_exp_ts - ACCESS_TOKEN_EXPIRE_MARGIN < utcnow_ts():
             _LOGGER.debug(f"Access-Token expired")
-             #AJH
-            exp_ts = self._access_exp_ts - ACCESS_TOKEN_EXPIRE_MARGIN
-            now_ts = utcnow_ts()
-            _LOGGER.debug(f"*** Access-Token expired; exp={exp_ts}, now={now_ts}")
-            
             return False    # silently continue to the next login method (token refresh)
 
         # Re-use this access token
-        _LOGGER.debug(f"*** _login_access_token 2")
-            
         dt = utcnow_dt()
         context = f"login access_token reuse"
         token = {
             "access_token": self._access_token,
             "access_expire": datetime.fromtimestamp(self._access_exp_ts, timezone.utc)
         }
-        _LOGGER.debug(f"*** _login_access_token 3")
-
         self._add_diagnostics(dt, context, None, None, token)
-
-        _LOGGER.debug(f"*** _login_access_token 4")
 
         # _LOGGER.debug(f"Reuse the access-token")
         return True
@@ -413,10 +396,8 @@ class SmartWaterApi:
         context = context.lower() if context else ""
 
         # Reduce amount of tracing to only when we are actually logged-in.
-        #AJH
-        # if self._login_time and method not in [LoginMethod.ACCESS_TOKEN]:
-        #    _LOGGER.debug(f"Logout")
-        _LOGGER.debug(f"Logout")
+        if self._login_time and method not in [LoginMethod.ACCESS_TOKEN]:
+           _LOGGER.debug(f"Logout")
 
         # Instead of closing we will simply forget all tokens. The result is that on a next
         # request, the client will act like it is a new one.
@@ -793,7 +774,7 @@ class SmartWaterApi:
             return
 
         method = request.get("method", "unknown") if request is not None else None
-        method = method.replace("GET", "HttpGet").replace("POST", "HttpPost")
+        method = method.replace("GET", "HttpGet").replace("POST", "HttpPost") if method is not None else None
 
         duration = response.get("elapsed", None) if response is not None else None
         duration = round(duration, 0) if duration is not None else None
