@@ -6,7 +6,7 @@ import sys
 from dataclasses import asdict
 from datetime import datetime
 
-from smartwater import AsyncSmartWaterApi
+from smartwater import AsyncSmartWaterApi, SmartWaterApiFlag
 
 # Setup logging to StdOut
 logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
@@ -28,7 +28,10 @@ async def main():
     api = None
     try:
         # Process these calls in the right order
-        api = AsyncSmartWaterApi(TEST_USERNAME, TEST_PASSWORD)
+        flags = {
+            SmartWaterApiFlag.REFRESH_HANDLER_START: True,
+        }        
+        api = AsyncSmartWaterApi(TEST_USERNAME, TEST_PASSWORD, flags=flags)
 
         # Retrieve profile of this user.
         profile = await api.fetch_profile()

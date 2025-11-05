@@ -29,7 +29,7 @@ def main():
     api = None
     try:
         # Process these calls in the right order
-        api = SmartWaterApi(TEST_USERNAME, TEST_PASSWORD, diagnostics_collect=True)
+        api = SmartWaterApi(TEST_USERNAME, TEST_PASSWORD)
 
         # Retrieve profile of this user.
         profile = api.fetch_profile()

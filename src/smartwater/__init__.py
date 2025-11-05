@@ -3,6 +3,7 @@ from .api_async import (
 )
 from .api_sync import (
     SmartWaterApi, 
+    SmartWaterApiFlag,
 )
 from .data import (
     SmartWaterConnectError, 

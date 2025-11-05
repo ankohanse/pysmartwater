@@ -47,13 +47,19 @@ from .tasks import (
 _LOGGER = logging.getLogger(__name__)
 
 
+class SmartWaterApiFlag(StrEnum):
+    """Extra flags to pass to Api"""
+    REFRESH_HANDLER_START   = "refresh_handler_start"   # bool
+    DIAGNOSTICS_COLLECT     = "diagnostics_collect"     # bool
+
+
 # Smart Water API to detect device and get device info, fetch the actual data from the device, and parse it
 class AsyncSmartWaterApi:
 
     # Constants
     CALL_CONTEXT = CALL_CONTEXT_ASYNC   # Sync/Async environment detection
     
-    def __init__(self, username, password, client:httpx.AsyncClient|None = None, diagnostics_collect:bool = False):
+    def __init__(self, username, password, client:httpx.AsyncClient|None = None, flags:dict = {}):
         
         # Configuration
         self._username: str = username
@@ -70,6 +76,7 @@ class AsyncSmartWaterApi:
         self._user_id: str = None
 
         # Automatic refresh of access token
+        self._refresh_handler_start = flags.get(SmartWaterApiFlag.REFRESH_HANDLER_START, False)
         self._refresh_task = None
         self._refresh_schedule: float = 0
 
@@ -89,7 +96,7 @@ class AsyncSmartWaterApi:
         self._login_lock = asyncio.Lock()
 
         # To pass diagnostics data back to our parent
-        self._diag_collect: bool = diagnostics_collect
+        self._diag_collect: bool = flags.get(SmartWaterApiFlag.DIAGNOSTICS_COLLECT, False)
         self._diag_counters: dict[str, int] = {}
         self._diag_history: list[SmartWaterHistoryItem] = []
         self._diag_details: dict[str, SmartWaterHistoryDetail] = {}
@@ -305,8 +312,8 @@ class AsyncSmartWaterApi:
         # Schedule the next refresh of the access token
         self._refresh_schedule = self._access_exp_ts - ACCESS_TOKEN_EXPIRE_MARGIN
 
-        # Make sure our login_refresh_handler thread is running
-        if self._refresh_task is None:
+        # If needed, start our login_refresh_handler thread
+        if self._refresh_handler_start and self._refresh_task is None:
             self._refresh_task = AsyncTaskHelper()
             await self._refresh_task.start(self._login_refresh_handler)
 
