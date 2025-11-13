@@ -5,7 +5,7 @@ import logging
 import pytest
 import pytest_asyncio
 
-from src.smartwater import (
+from src.pysmartwater import (
     AsyncSmartWaterApi,
     SmartWaterApi,
     SmartWaterError,

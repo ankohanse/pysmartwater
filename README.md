@@ -2,7 +2,7 @@
 [![buy_me_a_coffee](https://img.shields.io/badge/If%20you%20like%20it-Buy%20me%20a%20coffee-yellow.svg?style=for-the-badge)](https://www.buymeacoffee.com/ankohanse)
 
 
-# smartwater
+# pysmartwater
 
 Python library for retrieving sensor information from Smart Water branded devices.
 This component connects to the remote Smart Water Technology servers and automatically determines which gateways, tanks and pumps are available there.
@@ -22,6 +22,6 @@ When using the free app, usage is limited to 1 tank and 1 pump controller. For t
 # Usage
 
 The library is available from PyPi using:
-`pip install smartwater`
+`pip install pysmartwater`
 
 See example_api_use.py for an example of usage.

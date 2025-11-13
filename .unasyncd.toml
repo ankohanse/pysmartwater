@@ -9,7 +9,7 @@ exclude = [
 ]
 
 [tool.unasyncd.files]
-    "src/smartwater/api_async.py" = "src/smartwater/api_sync.py"
+    "src/pysmartwater/api_async.py" = "src/pysmartwater/api_sync.py"
     "tests/test_api_async.py" = "tests/test_api_sync.py"
 
 [tool.unasyncd.add_replacements]

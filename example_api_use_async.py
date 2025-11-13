@@ -6,7 +6,7 @@ import sys
 from dataclasses import asdict
 from datetime import datetime
 
-from smartwater import AsyncSmartWaterApi
+from pysmartwater import AsyncSmartWaterApi
 
 # Setup logging to StdOut
 logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)

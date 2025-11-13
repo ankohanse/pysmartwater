@@ -1,6 +1,6 @@
 [project]
-name = "smartwater"
-version = "0.0.13"
+name = "pysmartwater"
+version = "1.0.0"
 authors = [
   { name="Anko Hanse", email="anko_hanse@hotmail.com" },
 ]
@@ -25,8 +25,8 @@ tests = [
 ]
  
 [project.urls]
-Homepage = "https://github.com/ankohanse/smartwater"
-Issues = "https://github.com/ankohanse/smartwater/issues"
+Homepage = "https://github.com/ankohanse/pysmartwater"
+Issues = "https://github.com/ankohanse/pysmartwater/issues"
 
 [build-system]
 requires = [
@@ -41,5 +41,5 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-smartwater = ["*.json"]
+pysmartwater = ["*.json"]
 
