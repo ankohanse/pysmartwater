@@ -35,7 +35,6 @@ from .data import (
     CallContext,
     LoginMethod,
     FirestoreMethod,
-    SmartWaterContext,
     SmartWaterHistoryDetail, 
     SmartWaterHistoryItem,
     SmartWaterConnectError, 
@@ -53,6 +52,11 @@ import google.cloud.firestore_v1
 _LOGGER = logging.getLogger(__name__)
 
 
+class SmartWaterApiContext(StrEnum):
+    AUTO = "Auto"
+    SMARTWATER = "SmartWater"
+    GALLAGHER = "Gallagher"
+
 class SmartWaterApiFlag(StrEnum):
     """Extra flags to pass to Api"""
     REFRESH_HANDLER_START   = "refresh_handler_start"   # bool
@@ -65,12 +69,12 @@ class SmartWaterApi:
     # Constants
     CALL_CONTEXT = CALL_CONTEXT_SYNC   # Sync/Async environment detection
     
-    def __init__(self, username, password, context=SmartWaterContext.AUTO, client:httpx.Client|None = None, flags:dict = {}):
+    def __init__(self, username, password, context=SmartWaterApiContext.AUTO, client:httpx.Client|None = None, flags:dict = {}):
         
         # Configuration
         self._username: str = username
         self._password: str = password
-        self._context: SmartWaterContext = context
+        self._context: SmartWaterApiContext = context
 
         # Login data
         self._login_time: datetime|None = None
@@ -172,9 +176,9 @@ class SmartWaterApi:
         error = None
 
         match self._context:
-            case SmartWaterContext.AUTO:       methods = [LoginMethod.ACCESS_TOKEN, LoginMethod.REFRESH_TOKEN, LoginMethod.SMARTWATER, LoginMethod.GALLAGHER]
-            case SmartWaterContext.SMARTWATER: methods = [LoginMethod.ACCESS_TOKEN, LoginMethod.REFRESH_TOKEN, LoginMethod.SMARTWATER]
-            case SmartWaterContext.GALLAGHER:  methods = [LoginMethod.ACCESS_TOKEN, LoginMethod.REFRESH_TOKEN, LoginMethod.GALLAGHER]
+            case SmartWaterApiContext.AUTO:       methods = [LoginMethod.ACCESS_TOKEN, LoginMethod.REFRESH_TOKEN, LoginMethod.SMARTWATER, LoginMethod.GALLAGHER]
+            case SmartWaterApiContext.SMARTWATER: methods = [LoginMethod.ACCESS_TOKEN, LoginMethod.REFRESH_TOKEN, LoginMethod.SMARTWATER]
+            case SmartWaterApiContext.GALLAGHER:  methods = [LoginMethod.ACCESS_TOKEN, LoginMethod.REFRESH_TOKEN, LoginMethod.GALLAGHER]
             case _:
                 raise NotImplementedError(f"context '{self._context}'")
 

@@ -28,11 +28,6 @@ class FirestoreMethod(StrEnum):
     WATCH = "FirestoreWatch"
     SNAPSHOT = "FirestoreSnapshot"
 
-class SmartWaterContext(StrEnum):
-    AUTO = "Auto"
-    SMARTWATER = "SmartWater"
-    GALLAGHER = "Gallagher"
-
 class SmartWaterError(Exception):
     """Exception to indicate generic error failure."""    
     

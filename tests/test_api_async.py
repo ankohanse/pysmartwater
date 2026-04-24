@@ -8,7 +8,8 @@ import pytest_asyncio
 from src.pysmartwater import (
     AsyncSmartWaterApi,
     SmartWaterApi,
-    SmartWaterContext,
+    SmartWaterApiContext,
+    SmartWaterApiFlag,
     SmartWaterError,
     SmartWaterAuthError,
     SmartWaterConnectError,
@@ -53,12 +54,12 @@ async def context():
 @pytest.mark.parametrize(
     "name, ctx, usr, pwd, exp_except",
     [
-        ("ok",   SmartWaterContext.AUTO,          TEST_USERNAME, TEST_PASSWORD, None),
-        ("ok",   SmartWaterContext.SMARTWATER,    TEST_USERNAME, TEST_PASSWORD, None),
-        ("ok",   SmartWaterContext.GALLAGHER,     TEST_USERNAME, TEST_PASSWORD, None),
-        ("fail", SmartWaterContext.AUTO,          "dummy_usr",   "wrong_pwd",   SmartWaterConnectError),
-        ("fail", SmartWaterContext.SMARTWATER,    "dummy_usr",   "wrong_pwd",   SmartWaterConnectError),
-        ("fail", SmartWaterContext.GALLAGHER,     "dummy_usr",   "wrong_pwd",   SmartWaterConnectError),
+        ("ok",   SmartWaterApiContext.AUTO,          TEST_USERNAME, TEST_PASSWORD, None),
+        ("ok",   SmartWaterApiContext.SMARTWATER,    TEST_USERNAME, TEST_PASSWORD, None),
+        ("ok",   SmartWaterApiContext.GALLAGHER,     TEST_USERNAME, TEST_PASSWORD, None),
+        ("fail", SmartWaterApiContext.AUTO,          "dummy_usr",   "wrong_pwd",   SmartWaterConnectError),
+        ("fail", SmartWaterApiContext.SMARTWATER,    "dummy_usr",   "wrong_pwd",   SmartWaterConnectError),
+        ("fail", SmartWaterApiContext.GALLAGHER,     "dummy_usr",   "wrong_pwd",   SmartWaterConnectError),
     ]
 )
 async def test_login(name, ctx, usr, pwd, exp_except, request):
@@ -126,12 +127,12 @@ async def test_login_seq(name, usr, pwd, exp_except, request):
 @pytest.mark.parametrize(
     "name, ctx, loop, exp_except",
     [
-        ("ok",  SmartWaterContext.AUTO,        0, None),
-        ("ok",  SmartWaterContext.SMARTWATER,  0, None),
-        ("ok",  SmartWaterContext.GALLAGHER,   0, None),
-        #("24h", SmartWaterContext.AUTO,        24*60, None),    # Run 1 full day
-        #("24h", SmartWaterContext.SMARTWATER,  24*60, None),    # Run 1 full day
-        #("24h", SmartWaterContext.GALLAGHER,   24*60, None),    # Run 1 full day
+        ("ok",  SmartWaterApiContext.AUTO,        0, None),
+        ("ok",  SmartWaterApiContext.SMARTWATER,  0, None),
+        ("ok",  SmartWaterApiContext.GALLAGHER,   0, None),
+        #("24h", SmartWaterApiContext.AUTO,        24*60, None),    # Run 1 full day
+        #("24h", SmartWaterApiContext.SMARTWATER,  24*60, None),    # Run 1 full day
+        #("24h", SmartWaterApiContext.GALLAGHER,   24*60, None),    # Run 1 full day
     ]
 )
 async def test_get_data(name, ctx, loop, exp_except, request):
