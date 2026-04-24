@@ -19,7 +19,8 @@ class CallContext(StrEnum):
 class LoginMethod(StrEnum):
     ACCESS_TOKEN = 'Access-Token'
     REFRESH_TOKEN = 'Refresh-Token'
-    GOOGLE_APIS = 'Google-Apis'
+    SMARTWATER = 'SmartWater'
+    GALLAGHER = 'Gallagher'
 
 class FirestoreMethod(StrEnum):
     DOCUMENT = "FirestoreDoc"
@@ -27,6 +28,10 @@ class FirestoreMethod(StrEnum):
     WATCH = "FirestoreWatch"
     SNAPSHOT = "FirestoreSnapshot"
 
+class SmartWaterContext(StrEnum):
+    AUTO = "Auto"
+    SMARTWATER = "SmartWater"
+    GALLAGHER = "Gallagher"
 
 class SmartWaterError(Exception):
     """Exception to indicate generic error failure."""    

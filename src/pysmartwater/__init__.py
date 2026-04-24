@@ -6,6 +6,7 @@ from .api_sync import (
     SmartWaterApiFlag,
 )
 from .data import (
+    SmartWaterContext,
     SmartWaterConnectError, 
     SmartWaterAuthError, 
     SmartWaterDataError, 

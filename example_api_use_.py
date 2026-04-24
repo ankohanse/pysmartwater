@@ -18,8 +18,8 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("grpc").setLevel(logging.WARNING)
 
 
-TEST_USERNAME = "fill in your SmartWater username here"
-TEST_PASSWORD = "fill in your SmartWater password here"
+TEST_USERNAME = "fill in your Smart Water or Gallagher Water username here"
+TEST_PASSWORD = "fill in your Smart Water or Gallagher Water password here"
 #
 # Comment out the line below if username and password are set above
 from tests import TEST_USERNAME, TEST_PASSWORD

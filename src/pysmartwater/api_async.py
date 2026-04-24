@@ -1,4 +1,4 @@
-"""api.py: API for Smart Water Technology data retrieval."""
+"""api.py: API for Smart Water or Gallagher Water data retrieval."""
 
 import asyncio
 import base64
@@ -16,9 +16,11 @@ from google.oauth2 import credentials as oauth2
 from google.cloud import firestore_v1
 
 from .const import (
-    FIREBASE_PUBLIC_API_KEY,
+    FIREBASE_PUBLIC_API_KEY_SMARTWATER,
+    FIREBASE_PUBLIC_API_KEY_GALLAGHER,
+    FIRESTORE_PROJECT_NAME_SMARTWATER,
+    FIRESTORE_PROJECT_NAME_GALLAGHER,
     FIRESTORE_URL,
-    FIRESTORE_PROJECT_NAME,
     GOOGLE_APIS_LOGIN_URL,
     GOOGLE_APIS_REFRESH_URL,
     ACCESS_TOKEN_EXPIRE_MARGIN,
@@ -31,6 +33,7 @@ from .data import (
     CallContext,
     LoginMethod,
     FirestoreMethod,
+    SmartWaterContext,
     SmartWaterHistoryDetail, 
     SmartWaterHistoryItem,
     SmartWaterConnectError, 
@@ -59,11 +62,12 @@ class AsyncSmartWaterApi:
     # Constants
     CALL_CONTEXT = CALL_CONTEXT_ASYNC   # Sync/Async environment detection
     
-    def __init__(self, username, password, client:httpx.AsyncClient|None = None, flags:dict = {}):
+    def __init__(self, username, password, context=SmartWaterContext.AUTO, client:httpx.AsyncClient|None = None, flags:dict = {}):
         
         # Configuration
         self._username: str = username
         self._password: str = password
+        self._context: SmartWaterContext = context
 
         # Login data
         self._login_time: datetime|None = None
@@ -146,7 +150,7 @@ class AsyncSmartWaterApi:
 
     async def login(self):
         """
-        Login to Smart Water Technology servers.
+        Login to Smart Water Technology or Gallagher Water servers.
         Guards for calls from multiple threads.
         """
 
@@ -161,9 +165,16 @@ class AsyncSmartWaterApi:
 
         # First try to keep using the access token
         # Next, try to refresh that token.
-        # Finally try the Google APIs login method
+        # Finally try the Google APIs login method for SmartWater or Gallagher
         error = None
-        methods = [LoginMethod.ACCESS_TOKEN, LoginMethod.REFRESH_TOKEN, LoginMethod.GOOGLE_APIS]
+
+        match self._context:
+            case SmartWaterContext.AUTO:       methods = [LoginMethod.ACCESS_TOKEN, LoginMethod.REFRESH_TOKEN, LoginMethod.SMARTWATER, LoginMethod.GALLAGHER]
+            case SmartWaterContext.SMARTWATER: methods = [LoginMethod.ACCESS_TOKEN, LoginMethod.REFRESH_TOKEN, LoginMethod.SMARTWATER]
+            case SmartWaterContext.GALLAGHER:  methods = [LoginMethod.ACCESS_TOKEN, LoginMethod.REFRESH_TOKEN, LoginMethod.GALLAGHER]
+            case _:
+                raise NotImplementedError(f"context '{self._context}'")
+
         for method in methods:
             try:
                 match method:
@@ -175,9 +186,9 @@ class AsyncSmartWaterApi:
                         # Try to refresh the token
                         success = await self._login_refresh_token()
 
-                    case LoginMethod.GOOGLE_APIS:
+                    case LoginMethod.SMARTWATER | LoginMethod.GALLAGHER:
                         # Try to do a new login with username+password
-                        success = await self._login_google_apis()
+                        success = await self._login_google_apis(method)
 
                     case _:
                         success = False
@@ -240,7 +251,7 @@ class AsyncSmartWaterApi:
                 "method": "POST",
                 "url": GOOGLE_APIS_REFRESH_URL,
                 "params": {
-                    "key": base64.b64encode(FIREBASE_PUBLIC_API_KEY, b'-_').rstrip(b'=').decode('ascii'),
+                    "key": self._get_public_api_key(self._login_method),
                 },
                 "json": {
                     "grantType": "refresh_token",
@@ -249,7 +260,7 @@ class AsyncSmartWaterApi:
             },
         )
 
-        # Store access-token in variable so it will be added as Authorization header in calls to Smart Water servers
+        # Store access-token in variable so it will be added as Authorization header in calls to Smart Water or Gallagher Water servers
         self._user_id = result.get('user_id', None)
         self._refresh_token = result.get('refresh_token')
         self._access_token = result.get('access_token')
@@ -267,10 +278,10 @@ class AsyncSmartWaterApi:
         return await self._login_finalize()
 
 
-    async def _login_google_apis(self) -> bool:
+    async def _login_google_apis(self, login_method) -> bool:
         """Login via Google-Apis"""
 
-        _LOGGER.debug(f"Try login via Google-Apis for '{self._username}'")
+        _LOGGER.debug(f"Try login via {login_method} for '{self._username}'")
 
         result = await self._http_request(
             context = f"login Google-Apis",
@@ -278,7 +289,7 @@ class AsyncSmartWaterApi:
                 "method": "POST",
                 "url": GOOGLE_APIS_LOGIN_URL,
                 "params": {
-                    "key": base64.b64encode(FIREBASE_PUBLIC_API_KEY, b'-_').rstrip(b'=').decode('ascii'),
+                    "key": self._get_public_api_key(login_method)
                 },
                 "json": {
                     "email": self._username,
@@ -302,7 +313,7 @@ class AsyncSmartWaterApi:
 
         # if we reach this point then the token was OK
         self._login_time = utcnow_dt()
-        self._login_method = LoginMethod.GOOGLE_APIS
+        self._login_method = login_method
 
         _LOGGER.info(f"Login succeeded")
         return await self._login_finalize()
@@ -329,14 +340,15 @@ class AsyncSmartWaterApi:
             self._firestore_client_sync.close()
             self._firestore_client_sync = None
 
+        project = self._get_project_name()
         credentials = oauth2.Credentials(token=self._access_token, refresh_token=self._refresh_token)
 
         self._firestore_client_async = firestore_v1.AsyncClient(
-            project = FIRESTORE_PROJECT_NAME,
+            project = project,
             credentials = credentials
         )
         self._firestore_client_sync = firestore_v1.Client(
-            project = FIRESTORE_PROJECT_NAME,
+            project = project,
             credentials = credentials
         )
         self._firestore_client_close = True
@@ -422,6 +434,32 @@ class AsyncSmartWaterApi:
         if not context.startswith("login"):
             self._login_method = None
             self._login_time = None
+
+
+    def _get_public_api_key(self, login_method=None):
+        """
+        Get the right public api key for the passed login_method
+        """
+        login_method = login_method or self._login_method
+
+        match login_method:
+            case LoginMethod.SMARTWATER: return base64.b64encode(FIREBASE_PUBLIC_API_KEY_SMARTWATER, b'-_').rstrip(b'=').decode('ascii')
+            case LoginMethod.GALLAGHER:  return base64.b64encode(FIREBASE_PUBLIC_API_KEY_GALLAGHER, b'-_').rstrip(b'=').decode('ascii')
+            case _:                      
+                raise NotImplementedError(f"_get_public_api_key for '{login_method}'")
+
+
+    def _get_project_name(self, login_method=None):
+        """
+        Get the right project name for the passed login_method
+        """
+        login_method = login_method or self._login_method
+
+        match login_method:
+            case LoginMethod.SMARTWATER: return FIRESTORE_PROJECT_NAME_SMARTWATER
+            case LoginMethod.GALLAGHER:  return FIRESTORE_PROJECT_NAME_GALLAGHER
+            case _:
+                raise NotImplementedError(f"_get_project_name for '{login_method}'")
 
 
     def _get_expire(self, token: str|None) -> float:

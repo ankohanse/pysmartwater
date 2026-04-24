@@ -10,6 +10,7 @@ import pytest_asyncio
 from src.pysmartwater import (
     AsyncSmartWaterApi,
     SmartWaterApi,
+    SmartWaterContext,
     SmartWaterError,
     SmartWaterAuthError,
     SmartWaterConnectError,
@@ -53,31 +54,28 @@ def context():
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("context")
 @pytest.mark.parametrize(
-    "name, method, usr, pwd, exp_except",
+    "name, ctx, usr, pwd, exp_except",
     [
-        ("ok",   'Any',           TEST_USERNAME, TEST_PASSWORD, None),
-        ("ok",   'Google-Apis',   TEST_USERNAME, TEST_PASSWORD, None),
-        ("fail", 'Any',           "dummy_usr",   "wrong_pwd",   SmartWaterConnectError),
-        ("fail", 'Google-Apis',   "dummy_usr",   "wrong_pwd",   SmartWaterConnectError),
+        ("ok",   SmartWaterContext.AUTO,          TEST_USERNAME, TEST_PASSWORD, None),
+        ("ok",   SmartWaterContext.SMARTWATER,    TEST_USERNAME, TEST_PASSWORD, None),
+        ("ok",   SmartWaterContext.GALLAGHER,     TEST_USERNAME, TEST_PASSWORD, None),
+        ("fail", SmartWaterContext.AUTO,          "dummy_usr",   "wrong_pwd",   SmartWaterConnectError),
+        ("fail", SmartWaterContext.SMARTWATER,    "dummy_usr",   "wrong_pwd",   SmartWaterConnectError),
+        ("fail", SmartWaterContext.GALLAGHER,     "dummy_usr",   "wrong_pwd",   SmartWaterConnectError),
     ]
 )
-def test_login(name, method, usr, pwd, exp_except, request):
+def test_login(name, ctx, usr, pwd, exp_except, request):
     context = request.getfixturevalue("context")
     assert context.api is None
 
-    context.api = SmartWaterApi(usr, pwd)
+    context.api = SmartWaterApi(usr, pwd, context=ctx)
     assert context.api.closed == False
 
     if exp_except is None:
         assert context.api._login_method is None
         assert context.api._user_id is None
 
-        match method:
-            case 'Any':
-                context.api.login()
-                
-            case 'Google-Apis':
-                context.api._login_google_apis()
+        context.api.login()
 
         assert context.api._login_method is not None
         assert context.api._access_token is not None
@@ -88,9 +86,7 @@ def test_login(name, method, usr, pwd, exp_except, request):
 
     else:
         with pytest.raises(exp_except):
-            match method:
-                case 'Any':            context.api.login()
-                case 'Google-Apis':    context.api._login_google_apis()
+            context.api.login()
 
 
 @pytest.mark.asyncio
@@ -131,24 +127,23 @@ def test_login_seq(name, usr, pwd, exp_except, request):
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("context")
 @pytest.mark.parametrize(
-    "name, method, loop, exp_except",
+    "name, ctx, loop, exp_except",
     [
-        ("ok",  'Auto',                  0, None),
-        ("ok",  LoginMethod.GOOGLE_APIS, 0, None),
-        #("24h", "Auto",                  24*60, None),    # Run 1 full day
-        #("24h", LoginMethod.GOOGLE_APIS, 24*60, None),    # Run 1 full day
+        ("ok",  SmartWaterContext.AUTO,        0, None),
+        ("ok",  SmartWaterContext.SMARTWATER,  0, None),
+        ("ok",  SmartWaterContext.GALLAGHER,   0, None),
+        #("24h", SmartWaterContext.AUTO,        24*60, None),    # Run 1 full day
+        #("24h", SmartWaterContext.SMARTWATER,  24*60, None),    # Run 1 full day
+        #("24h", SmartWaterContext.GALLAGHER,   24*60, None),    # Run 1 full day
     ]
 )
-def test_get_data(name, method, loop, exp_except, request):
+def test_get_data(name, ctx, loop, exp_except, request):
     context = request.getfixturevalue("context")
-    context.api = SmartWaterApi(TEST_USERNAME, TEST_PASSWORD)
+    context.api = SmartWaterApi(TEST_USERNAME, TEST_PASSWORD, context=ctx)
     assert context.api.closed == False
 
     # Login
-    match method:
-        case 'Auto':                    context.api.login()
-        case LoginMethod.GOOGLE_APIS:   context.api._login_google_apis()
-
+    context.api.login()
     login_method_org = context.api._login_method
 
     # Get profile
@@ -158,6 +153,7 @@ def test_get_data(name, method, loop, exp_except, request):
     assert type(profile) is dict
     assert len(profile) > 0
 
+    gateway_id = None
     gateway_ids = []
     tank_ids = []
     pump_ids = []
@@ -217,6 +213,9 @@ def test_get_data(name, method, loop, exp_except, request):
             assert gateways is not None
             assert type(gateways) is dict
             assert len(gateways) >= len(gateway_ids)
+
+            if gateway_id is None and len(gateways) > 0:
+                gateway_id = next(iter(gateways))
                 
             # Get all devices (tanks and pumps) for a gateway
             devices = context.api.fetch_devices(gateway_id)
@@ -239,9 +238,6 @@ def test_get_data(name, method, loop, exp_except, request):
             #    await context.api._async_logout("simulate failure")
             #elif idx % 3 == 0:
             #    await context.api._async_logout("login force refresh", DabPumpsLogin.ACCESS_TOKEN)
-
-            if method != "Auto":
-                context.api._login_method = method
 
             _LOGGER.debug(f"Loop test, {idx} of {loop} (success={counter_success}, fail={counter_fail})")
             time.sleep(60)
