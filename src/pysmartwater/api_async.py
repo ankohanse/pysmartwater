@@ -540,7 +540,7 @@ class AsyncSmartWaterApi:
                 "method": FirestoreMethod.COLLECTION,
                 "path": f"gateways",
                 "where": {
-                    "field_path": f"members.{self._user_id}.enabled",
+                    "field_path": f"`members`.`{self._user_id}`.`enabled`",
                     "op_string": "==",
                     "value": True,
                 },
