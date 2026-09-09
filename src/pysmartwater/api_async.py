@@ -56,6 +56,7 @@ class SmartWaterApiContext(StrEnum):
 
 class SmartWaterApiFlag(StrEnum):
     """Extra flags to pass to Api"""
+    REFRESH_HANDLER_START   = "refresh_handler_start"   # bool, obsolete
     DIAGNOSTICS_COLLECT     = "diagnostics_collect"     # bool
 
 
