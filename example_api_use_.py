@@ -10,7 +10,7 @@ import time
 from pysmartwater import SmartWaterApi
 
 # Setup logging to StdOut
-logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format='%(asctime)s: %(message)s', datefmt='%H:%M:%S')
 logger = logging.getLogger(__name__)
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -82,7 +82,7 @@ def main():
 
             # Wait a couple of minutes and retrieve statuses again
             logger.info("")
-            logger.info(f"wait ({datetime.now().strftime("%H:%M")})")
+            logger.info(f"wait")
             time.sleep(300)
 
     except Exception as e:

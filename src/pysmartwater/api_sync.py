@@ -8,10 +8,9 @@ import jwt
 import httpx
 import logging
 import math
-import threading
 
-from datetime import datetime, timezone
-from enum import Enum, StrEnum
+from datetime import datetime, timedelta
+from enum import StrEnum
 from typing import Any
 
 from google.oauth2 import credentials as oauth2
@@ -22,31 +21,33 @@ from .const import (
     FIREBASE_PUBLIC_API_KEY_GALLAGHER,
     FIRESTORE_PROJECT_NAME_SMARTWATER,
     FIRESTORE_PROJECT_NAME_GALLAGHER,
-    FIRESTORE_URL,
     GOOGLE_APIS_LOGIN_URL,
     GOOGLE_APIS_REFRESH_URL,
-    ACCESS_TOKEN_EXPIRE_MARGIN,
+    TOKEN_MARGIN,
+    WATCHDOG_PERIOD,
+    WATCH_TIMEOUT,
     CALL_CONTEXT_ASYNC,
     CALL_CONTEXT_SYNC,
-    utcnow_ts,
     utcnow_dt,
+    utcnow_naive,
 )
 from .data import (
     CallContext,
     LoginMethod,
     FirestoreMethod,
-    SmartWaterHistoryDetail, 
+    SmartWaterHistoryDetail,
     SmartWaterHistoryItem,
-    SmartWaterConnectError, 
-    SmartWaterAuthError, 
-    SmartWaterDataError, 
-    SmartWaterError, 
+    SmartWaterConnectError,
+    SmartWaterAuthError,
+    SmartWaterDataError,
+    SmartWaterError,
 )
 from .tasks import (
     AsyncTaskHelper,
     TaskHelper,
 )
 import google.cloud.firestore_v1
+import threading
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -59,7 +60,6 @@ class SmartWaterApiContext(StrEnum):
 
 class SmartWaterApiFlag(StrEnum):
     """Extra flags to pass to Api"""
-    REFRESH_HANDLER_START   = "refresh_handler_start"   # bool
     DIAGNOSTICS_COLLECT     = "diagnostics_collect"     # bool
 
 
@@ -68,9 +68,9 @@ class SmartWaterApi:
 
     # Constants
     CALL_CONTEXT = CALL_CONTEXT_SYNC   # Sync/Async environment detection
-    
+
     def __init__(self, username, password, context=SmartWaterApiContext.AUTO, client:httpx.Client|None = None, flags:dict = {}):
-        
+
         # Configuration
         self._username: str = username
         self._password: str = password
@@ -81,29 +81,29 @@ class SmartWaterApi:
         self._login_method: LoginMethod|None = None
 
         self._refresh_token: str|None = None
-        self._access_token: str|None = None
-        self._access_exp_ts: float|None = None
-        
         self._user_id: str = None
 
-        # Automatic refresh of access token
-        self._refresh_handler_start = flags.get(SmartWaterApiFlag.REFRESH_HANDLER_START, False)
-        self._refresh_task = None
-        self._refresh_schedule: float = 0
+        # Watchdog to detect firestore communication stop
+        self._watchdog_task = None
 
         # Http Client.
-        self._http_client: httpx.Client = client or httpx.Client()
-        self._http_client_close = False if client else True     # Do not close an external passed client
+        if client is not None:
+            self._http_client = client
+            self._http_client_close = False # Do not close an external passed client
+        else:
+            self._http_client = httpx.Client()
+            self._http_client_close = True
 
         # Firestore Clients.
         # In the async Api class we also need the sync client as not all operations are supported on async client
-        # In the sync Api class this leads to assigning the same variable twice...
+        # In the generated sync Api class this leads to assigning the same variable twice...
+        self._firestore_credentials: oauth2.Credentials = None
         self._firestore_client: google.cloud.firestore_v1.Client = None
         self._firestore_client: google.cloud.firestore_v1.Client = None
-        self._firestore_client_close = False
 
-        self._firestore_watch_map: dict[str,Any] = {}
+        self._firestore_watch_map: dict[str,firestore_v1.Watch] = {}
         self._firestore_watch_def: dict[str,dict] = {}
+        self._firestore_watch_rcv: datetime = utcnow_dt() # Timestamp of last received watch data
 
         # Locks to protect certain operations from being called from multiple threads
         self._login_lock = threading.Lock()
@@ -113,6 +113,7 @@ class SmartWaterApi:
         self._diag_counters: dict[str, int] = {}
         self._diag_history: list[SmartWaterHistoryItem] = []
         self._diag_details: dict[str, SmartWaterHistoryDetail] = {}
+        self._diag_watchdog: dict[str, int] = {}
 
         self._diag_durations: dict[int, int] = { n: 0 for n in range(10) }
         self._diag_methods: dict[str, int] = { m: 0 for m in FirestoreMethod }
@@ -122,8 +123,8 @@ class SmartWaterApi:
     def profile_id(self) -> str:
         """The unique profile id. Only available after successfull login."""
         return self._user_id
-    
-    
+
+
     @property
     def closed(self) -> bool:
         """Returns whether the SmartWaterApi has been closed."""
@@ -131,10 +132,14 @@ class SmartWaterApi:
             return self._http_client.is_closed
         else:
             return True
-        
+
 
     def close(self):
         """Safely logout and close all client handles"""
+
+        # Stop watchdog
+        if self._watchdog_task is not None:
+            self._watchdog_task.stop()
 
         # Logout
         self.logout()
@@ -143,16 +148,6 @@ class SmartWaterApi:
         if self._http_client is not None and self._http_client_close:
             self._http_client.close()
             self._http_client = None
-
-        # In the async Api class we also needed the sync client as not all operations are supported on async client
-        # In the sync Api class this leads to checking the same variable twice...
-        if self._firestore_client is not None and self._firestore_client_close:
-            self._firestore_client.close()
-            self._firestore_client = None
-
-        if self._firestore_client is not None and self._firestore_client_close:
-            self._firestore_client.close()
-            self._firestore_client = None
 
 
     def login(self):
@@ -168,31 +163,19 @@ class SmartWaterApi:
 
 
     def _login(self):
-        """Login to Google Apis by trying each of the possible login methods"""        
+        """Login to Google Apis by trying each of the possible login methods"""
 
-        # First try to keep using the access token
-        # Next, try to refresh that token.
-        # Finally try the Google APIs login method for SmartWater or Gallagher
         error = None
-
         match self._context:
-            case SmartWaterApiContext.AUTO:       methods = [LoginMethod.ACCESS_TOKEN, LoginMethod.REFRESH_TOKEN, LoginMethod.SMARTWATER, LoginMethod.GALLAGHER]
-            case SmartWaterApiContext.SMARTWATER: methods = [LoginMethod.ACCESS_TOKEN, LoginMethod.REFRESH_TOKEN, LoginMethod.SMARTWATER]
-            case SmartWaterApiContext.GALLAGHER:  methods = [LoginMethod.ACCESS_TOKEN, LoginMethod.REFRESH_TOKEN, LoginMethod.GALLAGHER]
+            case SmartWaterApiContext.AUTO:       methods = [LoginMethod.SMARTWATER, LoginMethod.GALLAGHER]
+            case SmartWaterApiContext.SMARTWATER: methods = [LoginMethod.SMARTWATER]
+            case SmartWaterApiContext.GALLAGHER:  methods = [LoginMethod.GALLAGHER]
             case _:
                 raise NotImplementedError(f"context '{self._context}'")
 
         for method in methods:
             try:
                 match method:
-                    case LoginMethod.ACCESS_TOKEN:
-                        # Try to keep using the Access Token
-                        success = self._login_access_token()
-
-                    case LoginMethod.REFRESH_TOKEN:
-                        # Try to refresh the token
-                        success = self._login_refresh_token()
-
                     case LoginMethod.SMARTWATER | LoginMethod.GALLAGHER:
                         # Try to do a new login with username+password
                         success = self._login_google_apis(method)
@@ -202,8 +185,8 @@ class SmartWaterApi:
 
                 if success:
                     # if we reached this point then a login method succeeded
-                    return 
-            
+                    return
+
             except Exception as ex:
                 _LOGGER.debug(str(ex))
                 error = ex
@@ -214,82 +197,16 @@ class SmartWaterApi:
         # if we reached this point then all methods failed.
         if error:
             raise error
-        
-
-    def _login_access_token(self) -> bool:
-        """Inspect whether the access token is still valid"""
-
-        if self._access_token is None or self._access_exp_ts is None:
-            # No acces-token to check; silently continue to the next login method (token refresh)
-            return False
-
-        # inspect the exp field inside the access_token
-        if self._access_exp_ts - ACCESS_TOKEN_EXPIRE_MARGIN < utcnow_ts():
-            _LOGGER.debug(f"Access-Token expired")
-            return False    # silently continue to the next login method (token refresh)
-
-        # Re-use this access token
-        dt = utcnow_dt()
-        context = f"login access_token reuse"
-        token = {
-            "access_token": self._access_token,
-            "access_expire": datetime.fromtimestamp(self._access_exp_ts, timezone.utc)
-        }
-        self._add_diagnostics(dt, context, None, None, token)
-
-        # _LOGGER.debug(f"Reuse the access-token")
-        return True
-
-
-    def _login_refresh_token(self) -> bool:
-        """Attempty to refresh the access token"""
-
-        if not self._refresh_token:
-            # No refresh-token; silently continue to the next login method
-            return False
-        
-        # Don't bother to check the contents of the refresh token, 
-        # just attempt to request a new access token via the refresh token
-        _LOGGER.debug(f"Try refresh the access-token")
-
-        result = self._http_request(
-            context = f"login access_token refresh",
-            request = {
-                "method": "POST",
-                "url": GOOGLE_APIS_REFRESH_URL,
-                "params": {
-                    "key": self._get_public_api_key(self._login_method),
-                },
-                "json": {
-                    "grantType": "refresh_token",
-                    "refreshToken": self._refresh_token or "",
-                },
-            },
-        )
-
-        # Store access-token in variable so it will be added as Authorization header in calls to Smart Water or Gallagher Water servers
-        self._user_id = result.get('user_id', None)
-        self._refresh_token = result.get('refresh_token')
-        self._access_token = result.get('access_token')
-        self._access_exp_ts = self._get_expire(self._access_token)
-
-        if not self._access_token or not self._refresh_token:
-            error = f"No tokens found in response from token refresh"
-            _LOGGER.debug(error)    # logged as warning after last retry
-            raise SmartWaterAuthError(error)
-        
-        # The refresh of the tokens succeeded. Schedule the next refresh
-        self._login_time = utcnow_dt()
-
-        _LOGGER.info(f"Refreshed the access-token")
-        return self._login_finalize()
 
 
     def _login_google_apis(self, login_method) -> bool:
         """Login via Google-Apis"""
 
-        _LOGGER.debug(f"Try login via {login_method} for '{self._username}'")
+        if self._login_method is not None and self._refresh_token is not None:
+            # We are already logged-in
+            return True
 
+        _LOGGER.debug(f"Try login via {login_method} for '{self._username}'")
         result = self._http_request(
             context = f"login Google-Apis",
             request = {
@@ -304,16 +221,13 @@ class SmartWaterApi:
                     "returnSecureToken": True,
                     "clientType": "CLIENT_TYPE_ANDROID"
                 },
-            },            
+            },
         )
 
         self._refresh_token = result.get('refreshToken')
-        self._access_token = result.get('idToken')
-        self._access_exp_ts = self._get_expire(self._access_token)
-
         self._user_id = result.get('localId')
 
-        if not self._access_token:
+        if not self._refresh_token:
             error = f"No tokens found in response from login"
             _LOGGER.debug(error)    # logged as warning after last retry
             raise SmartWaterAuthError(error)
@@ -329,72 +243,17 @@ class SmartWaterApi:
     def _login_finalize(self) -> bool:
         """Common functionality that needs to be performed regardless of the type of login"""
 
-        # Schedule the next refresh of the access token
-        self._refresh_schedule = self._access_exp_ts - ACCESS_TOKEN_EXPIRE_MARGIN
+        # Re-create the client(s) and re-register all watches.
+        # This prevents a communication failure in the watch, leading to an extra thread created on every token refresh
+        self._unregister_firestore_watches()
+        self._create_firestore_client()
+        self._register_firestore_watches()
 
-        # If needed, start our login_refresh_handler thread
-        if self._refresh_handler_start and self._refresh_task is None:
-            self._refresh_task = TaskHelper()
-            self._refresh_task.start(self._login_refresh_handler)
+        # If needed, start our watchdog_handler thread
+        if self._watchdog_task is None:
+            self._watchdog_task = TaskHelper()
+            self._watchdog_task.start(self._watchdog_handler)
 
-        # In the async Api class we also need the sync client as not all operations are supported on async client
-        # In the sync Api class this leads to assigning the same variable twice...
-        if self._firestore_client is not None and self._firestore_client_close:
-            self._firestore_client.close()
-            self._firestore_client = None
-
-        if self._firestore_client is not None and self._firestore_client_close:
-            self._firestore_client.close()
-            self._firestore_client = None
-
-        project = self._get_project_name()
-        credentials = oauth2.Credentials(token=self._access_token, refresh_token=self._refresh_token)
-
-        self._firestore_client = google.cloud.firestore_v1.Client(
-            project = project,
-            credentials = credentials
-        )
-        self._firestore_client = google.cloud.firestore_v1.Client(
-            project = project,
-            credentials = credentials
-        )
-        self._firestore_client_close = True
-
-        # Re-register any callbacks
-        for watch_def in self._firestore_watch_def.values():
-            context = watch_def.get("context")
-            request = watch_def.get("request")
-            callback = watch_def.get("callback")
-       
-            self._firestore_request(context, request, callback)
-
-        return True
-
-
-    def _login_refresh_handler(self) -> bool:
-        """
-        Parallel task that will refresh the access token when scheduled.
-        """
-        _LOGGER.debug(f"Token refresh handler started")
-
-        while not self._refresh_task.is_stop_requested():
-            try:
-                # Wait until access token is almost expired, or wait at least 1 minute
-                exp_timestamp = self._refresh_schedule or 0
-                now_timestamp = utcnow_ts()
-                delay_seconds = max(math.ceil(exp_timestamp - now_timestamp), 60)
-
-                if self._refresh_task.wait_for_stop(timeout = delay_seconds):
-                    # Stop event detected
-                    pass
-                else:
-                    # Reuse access token, refresh it, or re-login
-                    self.login()
-
-            except Exception as ex:
-                _LOGGER.debug(f"Token refresh handler caught exception: {ex}")
-        
-        _LOGGER.debug(f"Token refresh handler stopped")
         return True
 
 
@@ -406,10 +265,9 @@ class SmartWaterApi:
         with self._login_lock:
             self._logout(context="", method=None)
 
-            # Stop token refresh_handler
-            if self._refresh_task is not None:
-                self._refresh_task.stop()
-                self._refresh_task = None
+            # Unregister any previous callbacks and close the firestore client
+            self._unregister_firestore_watches()
+            self._close_firestore_client()
 
 
     def _logout(self, context: str, method: LoginMethod|None = None):
@@ -422,21 +280,14 @@ class SmartWaterApi:
         context = context.lower() if context else ""
 
         # Reduce amount of tracing to only when we are actually logged-in.
-        if self._login_time and method not in [LoginMethod.ACCESS_TOKEN]:
+        if self._login_time and method is not None:
            _LOGGER.debug(f"Logout")
 
         # Instead of closing we will simply forget all tokens. The result is that on a next
         # request, the client will act like it is a new one.
-        self._access_token = None
-        self._access_exp_ts = None
+        self._refresh_token = None
 
-        # Do not clear refresh token when called in a 'login' context and when we were 
-        # only checking the access_token
-        if not (context.startswith("login") and method in [LoginMethod.ACCESS_TOKEN]):
-            self._refresh_token = None
-            self._refresh_timestamp = 0
-
-        # Do not clear login_method when called in a 'login' context, as it interferes with 
+        # Do not clear login_method when called in a 'login' context, as it interferes with
         # the loop iterating all login methods.
         if not context.startswith("login"):
             self._login_method = None
@@ -452,7 +303,7 @@ class SmartWaterApi:
         match login_method:
             case LoginMethod.SMARTWATER: return base64.b64encode(FIREBASE_PUBLIC_API_KEY_SMARTWATER, b'-_').rstrip(b'=').decode('ascii')
             case LoginMethod.GALLAGHER:  return base64.b64encode(FIREBASE_PUBLIC_API_KEY_GALLAGHER, b'-_').rstrip(b'=').decode('ascii')
-            case _:                      
+            case _:
                 raise NotImplementedError(f"_get_public_api_key for '{login_method}'")
 
 
@@ -469,14 +320,118 @@ class SmartWaterApi:
                 raise NotImplementedError(f"_get_project_name for '{login_method}'")
 
 
-    def _get_expire(self, token: str|None) -> float:
-        """Return the exp field from the token"""
-        try:
-            payload = jwt.decode(jwt=token, options={"verify_signature": False})
-            
-            return float(payload.get("exp", 0))
-        except:            
-            return float(0)
+    def _create_firestore_client(self):
+        """Initialize a new firestore client and re-register previous callbacks"""
+
+        # Prepare a set of credentials that can refresh its own token
+        if self._firestore_credentials is None:
+            self._firestore_credentials = oauth2.Credentials(
+                token = None,
+                refresh_token= self._refresh_token,
+                client_id = "",
+                client_secret = "",
+                token_uri = f"{GOOGLE_APIS_REFRESH_URL}?key={self._get_public_api_key(self._login_method)}",
+            )
+
+        # In the async Api class we also needed the sync client as not all operations are supported on async client
+        # In the generated sync Api class this leads to checking the same variable twice...
+        if self._firestore_client is None:
+            self._firestore_client = google.cloud.firestore_v1.Client(
+                project = self._get_project_name(),
+                credentials = self._firestore_credentials,
+            )
+        if self._firestore_client is None:
+            self._firestore_client = google.cloud.firestore_v1.Client(
+                project = self._get_project_name(),
+                credentials = self._firestore_credentials,
+            )
+
+
+    def _close_firestore_client(self):
+        """Cleanly close the firestore client"""
+
+        # In the async Api class we also needed the sync client as not all operations are supported on async client
+        # In the generated sync Api class this leads to checking the same variable twice...
+        if self._firestore_client is not None:
+            self._firestore_client.close()
+            self._firestore_client = None
+
+        if self._firestore_client is not None:
+            self._firestore_client.close()
+            self._firestore_client = None
+
+        if self._firestore_credentials is not None:
+            self._firestore_credentials = None
+
+
+    def _register_firestore_watches(self):
+        """Re-register any callbacks"""
+        for key,watch_def in self._firestore_watch_def.items():
+            if not key in self._firestore_watch_map:
+                context = watch_def.get("context")
+                request = watch_def.get("request")
+                callback = watch_def.get("callback")
+
+                self._firestore_request(context, request, callback)
+
+
+    def _unregister_firestore_watches(self):
+        """Un-register any callbacks"""
+
+        for path,watch_def in self._firestore_watch_def.items():
+            if path in self._firestore_watch_map:
+                context = watch_def.get("context",f"watch {path}").replace('watch', 'unwatch')
+                request = {
+                    "method": FirestoreMethod.UNWATCH,
+                    "path": path
+                }
+                self._firestore_request(context, request)
+
+
+    def _watchdog_handler(self) -> bool:
+        """
+        Parallel task that will monitor communications to detect failure
+        """
+        _LOGGER.debug(f"Watchdog handler started")
+
+        while not self._watchdog_task.is_stop_requested():
+            try:
+                # Wait until watchdog scheduled time
+                if self._watchdog_task.wait_for_stop(timeout = WATCHDOG_PERIOD):
+                    # Stop event detected
+                    continue
+
+                # Inspect various conditions that will trigger a restart
+                restart = False
+                if self._login_method is None and not self._login_lock.locked:
+
+                    _LOGGER.debug(f"Watchdog detected unexpected logout")
+                    restart = True
+                    self._add_diagnostics(utcnow_dt(), "watchdog detect_logout")
+
+                if self._firestore_credentials is not None and \
+                   self._firestore_credentials.expiry + timedelta(seconds=TOKEN_MARGIN) < utcnow_naive(): # Note: do not use .expired, it uses a negative offset
+                    
+                    _LOGGER.debug(f"Watchdog detected expired token")
+                    restart = True
+                    self._add_diagnostics(utcnow_dt(), "watchdog expired_token")
+
+                if self._firestore_watch_def and \
+                   self._firestore_watch_rcv + timedelta(seconds=WATCH_TIMEOUT) < utcnow_dt():
+                    
+                    _LOGGER.debug(f"Watchdog detected lack of communication within past {math.ceil(WATCH_TIMEOUT/60)} minutes.")
+                    restart = True
+                    self._add_diagnostics(utcnow_dt(), "watchdog watch_timeout")
+
+                if restart:
+                    self.logout()
+                    self.login()
+
+            except Exception as ex:
+                _LOGGER.debug(f"Watchdog handler caught exception: {ex}")
+
+        _LOGGER.debug(f"Watchdog handler stopped")
+        return True
 
 
     def fetch_profile(self):
@@ -493,7 +448,7 @@ class SmartWaterApi:
                 "path": f"profiles/{self._user_id}",
             },
         )
-    
+
 
     def on_profile(self, callback):
         """
@@ -524,7 +479,7 @@ class SmartWaterApi:
         return self._firestore_request(
             context = f"gateway {gateway_id}",
             request = {
-                "method": "FirestoreDoc",
+                "method": FirestoreMethod.DOCUMENT,
                 "path": f"gateways/{gateway_id}",
             },
         )
@@ -584,7 +539,7 @@ class SmartWaterApi:
         return self._firestore_request(
             context = f"device {device_id}",
             request = {
-                "method": "FirestoreDoc",
+                "method": FirestoreMethod.DOCUMENT,
                 "path": f"devices/{device_id}",
             },
         )
@@ -647,11 +602,11 @@ class SmartWaterApi:
         flags = request.get("flags", {})
         try:
             rsp = self._http_client.request(
-                method = request["method"], 
+                method = request["method"],
                 url = request["url"],
-                params = request.get("params", None), 
-                data = request.get("data", None), 
-                json = request.get("json", None), 
+                params = request.get("params", None),
+                data = request.get("data", None),
+                json = request.get("json", None),
                 headers = request.get("headers", None),
                 follow_redirects = flags.get("redirects", True)
             )
@@ -679,7 +634,7 @@ class SmartWaterApi:
 
         # Save the diagnostics if requested
         self._add_diagnostics(dt, context, request, response)
-        
+
         # Check response
         if not response["success"]:
             error = f"Unable to perform request, got response {response["status"]} while trying to reach {request["url"]}"
@@ -691,23 +646,23 @@ class SmartWaterApi:
                 raise SmartWaterAuthError(error)
             else:
                 raise SmartWaterConnectError(error)
-        
+
         if flags.get("redirects",None) == False and response['status'].startswith("302"):
             return response["headers"].get("location", '')
 
         elif "text" in response:
             return response["text"]
-        
+
         elif "json" in response:
             return response["json"]
-        
+
         else:
             return None
-    
+
 
     def _firestore_request(self, context: str, request: dict, callback=None):
         """Firestore document, collection or watch request"""
-        
+
         # Perform the request
         dt = utcnow_dt()
         response = {}
@@ -734,8 +689,8 @@ class SmartWaterApi:
                 if "where" in request:
                     r_where = request["where"]
                     f_filter = firestore_v1.FieldFilter(
-                                    field_path = r_where.get("field_path"), 
-                                    op_string = r_where.get("op_string", "=="), 
+                                    field_path = r_where.get("field_path"),
+                                    op_string = r_where.get("op_string", "=="),
                                     value = r_where.get("value", None)
                     )
                     coll_ref = coll_ref.where(filter = f_filter)
@@ -748,14 +703,14 @@ class SmartWaterApi:
                         f_direction = firestore_v1.types.query.StructuredQuery.Direction.ASCENDING
 
                     coll_ref = coll_ref.order_by(
-                                    field_path = r_order.get("field_path"), 
+                                    field_path = r_order.get("field_path"),
                                     direction = f_direction
                     )
 
                 # Result is a list of document snapshots
                 # Convert into a mapping from id to dict
                 coll_snap = coll_ref.get()
-                
+
                 response = {
                     "items": { item.id: item.to_dict() for item in coll_snap },
                     "elapsed": round((utcnow_dt() - dt).total_seconds(), 1),
@@ -763,9 +718,11 @@ class SmartWaterApi:
 
             elif request["method"] == FirestoreMethod.WATCH:
                 # Start a watcher for changes to a document
+                # Note: the 'on_snapshot' function is not implemented for the AsyncDocumentReference class of the async client,
+                #       so need to fallback to the DocumentReference class from the sync client
                 doc_path = request["path"]
                 doc_ref = self._firestore_client.document(doc_path)
-                
+
                 # Helper functions to process the result before we return it to the outer callback
                 def watcher_callback(doc_snapshot, changes, read_time):
                     for doc_snap in doc_snapshot:
@@ -781,6 +738,11 @@ class SmartWaterApi:
                             "updated": doc_snap.update_time,
                             "json": doc_snap.to_dict(),
                         }
+
+                        # Remember that we have seen successfull communication
+                        self._firestore_watch_rcv = utcnow_dt()
+
+                        # Save the diagnostics if requested
                         self._add_diagnostics(dt, context, request, response)
 
                         callback(doc_snap.id, doc_snap.to_dict())
@@ -793,24 +755,38 @@ class SmartWaterApi:
                     "request": request,
                     "callback": callback,
                 }
+                self._firestore_watch_rcv = utcnow_dt()  # Initialize timestamp of last watched communication
 
                 response = {
                     "elapsed": round((utcnow_dt() - dt).total_seconds(), 1),
                 }
+
+            elif request["method"] == FirestoreMethod.UNWATCH:
+                # Stop a watcher for changes to a document
+                doc_path = request["path"]
+                try:
+                    watch_ref = self._firestore_watch_map.get(doc_path, None)
+                    if watch_ref is not None:
+                        watch_ref.close()
+                except Exception as ex:
+                    pass
+                finally:
+                    self._firestore_watch_map.pop(doc_path, None)
+
             else:
                 raise NotImplementedError(f"FirestoreMethod '{request["method"]}'")
-            
+
         except Exception as ex:
-            error = f"Unable to perform request, got exception '{str(ex)}' while trying to reach {request["method"]} '{request["path"]}'"
+            error = f"Unable to perform request, got exception '{ex}' while trying to reach {request["method"]} '{request["path"]}'"
             _LOGGER.debug(error)
 
             # Force a logout to so next login will be a real login, not a token reuse
             self._logout(context)
             raise SmartWaterConnectError(error)
-        
+
         # Save the diagnostics if requested
         self._add_diagnostics(dt, context, request, response)
-        
+
         if "json" in response:
             return response["json"]
         elif "items" in response:
@@ -819,7 +795,7 @@ class SmartWaterApi:
             return None
 
 
-    def _add_diagnostics(self, dt: datetime, context: str, request: dict|None, response: dict|None, token: dict|None = None):
+    def _add_diagnostics(self, dt: datetime, context: str, request: dict = None, response: dict = None, token: dict = None):
         """Gather diagnostics"""
 
         if not self._diag_collect:
@@ -830,7 +806,7 @@ class SmartWaterApi:
 
         duration = response.get("elapsed", None) if response is not None else None
         duration = round(duration, 0) if duration is not None else None
-        
+
         history_item = SmartWaterHistoryItem.create(dt, context, request, response, token)
         history_detail = SmartWaterHistoryDetail.create(dt, context, request, response, token)
 
@@ -854,7 +830,7 @@ class SmartWaterApi:
         else:
             self._diag_counters[context] = 1
 
-        # Call history        
+        # Call history
         self._diag_history.append(history_item)
         while len(self._diag_history) > 64:
             self._diag_history.pop(0)
@@ -869,6 +845,8 @@ class SmartWaterApi:
         data = {
             "login_time": self._login_time,
             "login_method": self._login_method,
+            "watch_map": self._firestore_watch_def,
+            "watch_last_receved": self._firestore_watch_rcv,
         }
 
         calls_total = sum([ n for key, n in self._diag_counters.items() ]) or 1
@@ -882,7 +860,7 @@ class SmartWaterApi:
         methods_total = sum(self._diag_methods.values()) or 1
         methods_counter = dict(sorted(self._diag_methods.items()))
         methods_percent = { key: round(100.0 * n / methods_total, 2) for key, n in methods_counter.items() }
-        
+
         return {
             "data": data,
             "diagnostics": {

@@ -9,7 +9,7 @@ from datetime import datetime
 from pysmartwater import AsyncSmartWaterApi, SmartWaterApiFlag
 
 # Setup logging to StdOut
-logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format='%(asctime)s: %(message)s', datefmt='%H:%M:%S')
 logger = logging.getLogger(__name__)
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -28,10 +28,7 @@ async def main():
     api = None
     try:
         # Process these calls in the right order
-        flags = {
-            SmartWaterApiFlag.REFRESH_HANDLER_START: True,
-        }        
-        api = AsyncSmartWaterApi(TEST_USERNAME, TEST_PASSWORD, flags=flags)
+        api = AsyncSmartWaterApi(TEST_USERNAME, TEST_PASSWORD)
 
         # Retrieve profile of this user.
         profile = await api.fetch_profile()
@@ -69,7 +66,7 @@ async def main():
         for t in range(500):
             # Wait a couple of minutes and retrieve statuses again
             logger.info("")
-            logger.info(f"wait ({datetime.now().strftime("%H:%M")})")
+            logger.info(f"wait")
             await asyncio.sleep(300)
 
     except Exception as e:

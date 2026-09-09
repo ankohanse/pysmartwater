@@ -26,6 +26,7 @@ class FirestoreMethod(StrEnum):
     DOCUMENT = "FirestoreDoc"
     COLLECTION = "FirestoreColl"
     WATCH = "FirestoreWatch"
+    UNWATCH = "FirestoreUnwatch"
     SNAPSHOT = "FirestoreSnapshot"
 
 class SmartWaterError(Exception):

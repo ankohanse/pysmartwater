@@ -30,9 +30,9 @@
             }
         },
         {
-            "label": "unsyncd",
+            "label": "unasyncd",
             "type": "shell",
-            "command": "unsyncd",
+            "command": "unasyncd",
             "group": {
                 "kind": "build",
                 "isDefault": true

@@ -76,9 +76,8 @@ async def test_login(name, ctx, usr, pwd, exp_except, request):
         await context.api.login()
 
         assert context.api._login_method is not None
-        assert context.api._access_token is not None
-        assert context.api._access_exp_ts > 0
         assert context.api._refresh_token is not None
+        assert context.api._firestore_credentials is not None
 
         assert context.api._user_id is not None
 
@@ -215,14 +214,14 @@ async def test_get_data(name, ctx, loop, exp_except, request):
             if gateway_id is None and len(gateways) > 0:
                 gateway_id = next(iter(gateways))
                 
-            # Get all devices (tanks and pumps) for a gateway
-            devices = await context.api.fetch_devices(gateway_id)
+                # Get all devices (tanks and pumps) for a gateway
+                devices = await context.api.fetch_devices(gateway_id)
 
-            assert devices is not None
-            assert type(devices) is dict
-            assert len(devices) >= len(tank_ids) + len(pump_ids)
+                assert devices is not None
+                assert type(devices) is dict
+                assert len(devices) >= len(tank_ids) + len(pump_ids)
 
-            counter_success += 1
+                counter_success += 1
         
         except Exception as ex:
             counter_fail += 1
