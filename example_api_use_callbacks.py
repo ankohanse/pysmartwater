@@ -28,7 +28,10 @@ async def main():
     api = None
     try:
         # Process these calls in the right order
-        api = AsyncSmartWaterApi(TEST_USERNAME, TEST_PASSWORD)
+        flags = {
+            SmartWaterApiFlag.WATCHDOG_START: True,
+        }
+        api = AsyncSmartWaterApi(TEST_USERNAME, TEST_PASSWORD, flags=flags)
 
         # Retrieve profile of this user.
         profile = await api.fetch_profile()

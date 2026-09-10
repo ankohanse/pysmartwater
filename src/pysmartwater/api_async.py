@@ -57,6 +57,7 @@ class SmartWaterApiContext(StrEnum):
 class SmartWaterApiFlag(StrEnum):
     """Extra flags to pass to Api"""
     REFRESH_HANDLER_START   = "refresh_handler_start"   # bool, obsolete
+    WATCHDOG_START          = "watchdog_start"          # bool
     DIAGNOSTICS_COLLECT     = "diagnostics_collect"     # bool
 
 
@@ -82,6 +83,7 @@ class AsyncSmartWaterApi:
 
         # Watchdog to detect firestore communication stop
         self._watchdog_task = None
+        self._watchdog_start = flags.get(SmartWaterApiFlag.WATCHDOG_START, False)
 
         # Http Client.
         if client is not None:
@@ -247,7 +249,7 @@ class AsyncSmartWaterApi:
         await self._register_firestore_watches()
 
         # If needed, start our watchdog_handler thread
-        if self._watchdog_task is None:
+        if self._watchdog_start and self._watchdog_task is None:
             self._watchdog_task = AsyncTaskHelper()
             await self._watchdog_task.start(self._watchdog_handler)
 
@@ -389,7 +391,7 @@ class AsyncSmartWaterApi:
         """
         Parallel task that will monitor communications to detect failure
         """
-        _LOGGER.debug(f"Watchdog handler started")
+        _LOGGER.info(f"Watchdog started")
 
         while not self._watchdog_task.is_stop_requested():
             try:
@@ -402,21 +404,21 @@ class AsyncSmartWaterApi:
                 restart = False
                 if self._login_method is None and not self._login_lock.locked:
 
-                    _LOGGER.debug(f"Watchdog detected unexpected logout")
+                    _LOGGER.info(f"Watchdog detected unexpected logout")
                     restart = True
                     self._add_diagnostics(utcnow_dt(), "watchdog detect_logout")
 
                 if self._firestore_credentials is not None and \
                    self._firestore_credentials.expiry + timedelta(seconds=TOKEN_MARGIN) < utcnow_naive(): # Note: do not use .expired, it uses a negative offset
                     
-                    _LOGGER.debug(f"Watchdog detected expired token")
+                    _LOGGER.info(f"Watchdog detected expired token")
                     restart = True
                     self._add_diagnostics(utcnow_dt(), "watchdog expired_token")
 
                 if self._firestore_watch_def and \
                    self._firestore_watch_rcv + timedelta(seconds=WATCH_TIMEOUT) < utcnow_dt():
                     
-                    _LOGGER.debug(f"Watchdog detected lack of communication within past {math.ceil(WATCH_TIMEOUT/60)} minutes.")
+                    _LOGGER.info(f"Watchdog detected lack of communication within past {math.ceil(WATCH_TIMEOUT/60)} minutes.")
                     restart = True
                     self._add_diagnostics(utcnow_dt(), "watchdog watch_timeout")
 
@@ -425,9 +427,9 @@ class AsyncSmartWaterApi:
                     await self.login()
 
             except Exception as ex:
-                _LOGGER.debug(f"Watchdog handler caught exception: {ex}")
+                _LOGGER.debug(f"Watchdog caught exception: {ex}")
 
-        _LOGGER.debug(f"Watchdog handler stopped")
+        _LOGGER.info(f"Watchdog stopped")
         return True
 
 
